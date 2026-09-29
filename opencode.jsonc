@@ -1,0 +1,30 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "llamacpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "llama.cpp (local Vulkan)",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1",
+        "timeout": 3600000,
+        "headerTimeout": 3600000,
+        "chunkTimeout": 3600000
+      },
+      "models": {
+        "qwen3.8-flash-next": {
+          "name": "Qwen3.8 Flash Next (UD-IQ4_XS)",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "llamacpp/qwen3.8-flash-next",
+  "enabled_providers": [
+    "llamacpp"
+  ]
+}
