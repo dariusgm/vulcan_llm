@@ -15,6 +15,7 @@ Scripts to reproduce a local llama.cpp (Vulkan) server plus an OpenCode config.
 |---|---|
 | `setup.sh` | One-time install and build |
 | `server.sh` | Tune the GPU and start `llama-server` on `127.0.0.1:8080` |
+| `stop.sh` | Stop `llama-server` (SIGTERM, SIGKILL after a timeout) |
 | `opencode.jsonc` | OpenCode config, copy to `~/.config/opencode/opencode.jsonc` |
 
 ## setup.sh
