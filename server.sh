@@ -14,6 +14,6 @@ echo 3 > $D/pp_dpm_mclk
 echo '1 2' > $D/pp_dpm_sclk"
 
 exec ./llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.8-Flash-Next-GGUF:UD-IQ4_XS --no-mmproj \
-  --jinja -ngl 999 --cpu-moe -fa on -c 32768 -t 12 -lm none -np 1 -b 2048 -ub 1024 \
+  --jinja -ngl 999 --cpu-moe -fa on -c 131072 -t 12 -lm none -b 2048 -ub 1024 --host 0.0.0.0 --mmproj-auto --parallel 4 \
   --temp 1.0 --top-p 0.95 --top-k 20 --min-p 0.0 \
   --chat-template-kwargs '{"reasoning_effort":"medium"}' "$@"
