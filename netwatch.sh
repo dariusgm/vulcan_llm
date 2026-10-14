@@ -6,14 +6,26 @@
 # Usage:   ./netwatch.sh                (foreground)
 #          nohup ./netwatch.sh &        (background)
 #          IFACE=enp4s0 INTERVAL=20 ./netwatch.sh
+#          sudo NETWATCH_DIR=/media/usb/netwatch ./netwatch.sh snapshot   (one-shot, e.g. onto a USB stick)
 # Output:  ~/netwatch/netwatch.log      one line per probe round (OK / FAIL + which probes)
 #          ~/netwatch/counters.csv      NIC error counters every 5 min (to spot growth over time)
 #          ~/netwatch/incidents/<ts>/   full snapshot per incident (+ one more at recovery)
+#          ~/netwatch/resolved-dbus.log who reconfigures systemd-resolved via D-Bus (root only), incl. caller PID/unit
 #
 # Before you restart the network after a failure: check that an incident folder exists
 # (ls ~/netwatch/incidents). Then give me that folder (or the newest one) for analysis.
 
-IFACE="${IFACE:-enp4s0}"
+# interface: explicit > default route > first physical NIC that is up
+detect_iface() {
+  local i; i="$(ip route show default 2>/dev/null | awk '/default/{for(n=1;n<=NF;n++) if($n=="dev"){print $(n+1); exit}}')"
+  [ -n "$i" ] && { echo "$i"; return; }
+  for i in /sys/class/net/*; do
+    [ -e "$i/device" ] && [ "$(cat "$i/operstate" 2>/dev/null)" = up ] && { basename "$i"; return; }
+  done
+  for i in /sys/class/net/*; do [ -e "$i/device" ] && { basename "$i"; return; }; done
+}
+IFACE="${IFACE:-$(detect_iface)}"
+[ -n "$IFACE" ] && [ -e "/sys/class/net/$IFACE" ] || { echo "netwatch: interface '${IFACE}' not found; set IFACE=... (see: ip link)" >&2; exit 1; }
 INTERVAL="${INTERVAL:-30}"
 TEST_NAME="${TEST_NAME:-example.com}"
 PUBLIC_V4="${PUBLIC_V4:-1.1.1.1}"
@@ -21,15 +33,16 @@ PUBLIC_V6="${PUBLIC_V6:-2606:4700:4700::1111}"
 FAILS_BEFORE_SNAPSHOT="${FAILS_BEFORE_SNAPSHOT:-2}"
 RESNAPSHOT_EVERY="${RESNAPSHOT_EVERY:-300}"   # seconds between snapshots during one long incident
 
-BASE="$HOME/netwatch"
+BASE="${NETWATCH_DIR:-$HOME/netwatch}"
 LOG="$BASE/netwatch.log"
 CSV="$BASE/counters.csv"
+DBUS_LOG="$BASE/resolved-dbus.log"
 INC="$BASE/incidents"
 mkdir -p "$INC"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 ts()   { date '+%Y-%m-%d %H:%M:%S%z'; }
-log()  { echo "$(ts) $*" >> "$LOG"; }
+log()  { local l; l="$(ts) $*"; echo "$l" >> "$LOG"; [ -t 1 ] && echo "$l"; }   # also to terminal when interactive
 
 # ---- probes: each returns 0 = ok, 1 = fail -------------------------------------------------
 p_sysdns()  { timeout 6 getent ahosts "$TEST_NAME" >/dev/null 2>&1; }          # full system path (NSS -> resolved)
@@ -52,6 +65,7 @@ run_probes() {
   chk sysdns   p_sysdns
   chk stub     p_stub
   local s
+  chk linkdns  test -n "$(dns_servers)"   # resolved has upstream servers for $IFACE (lost on 2026-10-13 incident)
   for s in $(dns_servers); do chk "dns[$s]" p_direct "$s"; done
   chk "dns[$PUBLIC_V4]" p_direct "$PUBLIC_V4"
   chk "ping4[$PUBLIC_V4]" p_ping4 "$PUBLIC_V4"
@@ -60,6 +74,30 @@ run_probes() {
   g="$(gw6)";          [ -n "$g" ] && chk "gw6[$g]" p_ping6 "$g"
   # an incident = system DNS broken OR any connectivity probe broken
   [ "$FAILCOUNT" -gt 0 ] && FAILED=1
+}
+
+# ---- resolved D-Bus watch: logs every call that changes resolved's link config, plus the caller ------
+# (2026-10-13: resolved lost the DNS servers of the link without any journal entry; this names the culprit)
+start_dbus_watch() {
+  if [ "$(id -u)" -ne 0 ] || ! have dbus-monitor || ! have busctl; then
+    log "NOTE: resolved D-Bus watch disabled (needs root + dbus-monitor + busctl)"; return
+  fi
+  local m="type='method_call',destination='org.freedesktop.resolve1'" rules=() x
+  for x in SetLinkDNS SetLinkDNSEx SetLinkDomains SetLinkDefaultRoute RevertLink \
+           SetDNS SetDNSEx SetDomains SetDefaultRoute Revert FlushCaches ResetServerFeatures; do
+    rules+=("$m,member='$x'")
+  done
+  ( dbus-monitor --system "${rules[@]}" 2>&1 | while IFS= read -r l; do
+      echo "$(ts) $l"
+      case "$l" in *"method call"*sender=*)   # resolve the caller while it still exists
+        s="${l#*sender=}"; s="${s%% *}"
+        busctl --system status "$s" 2>/dev/null | grep -E '^(PID|Comm|CommandLine|Unit)=' | sed "s/^/$(ts)     caller /";;
+      esac
+    done >> "$DBUS_LOG" ) &
+  DBUS_PID=$!
+  trap 'pkill -P "$DBUS_PID" 2>/dev/null; kill "$DBUS_PID" 2>/dev/null' EXIT
+  trap 'exit 0' INT TERM
+  log "resolved D-Bus watch -> $DBUS_LOG"
 }
 
 # ---- snapshot ---------------------------------------------------------------------------------
@@ -88,6 +126,9 @@ snapshot() { # $1 = label
     done; } > "$d/23-dig-direct.txt" 2>&1
   { echo "=== dig AAAA"; timeout 8 dig +time=3 +tries=1 AAAA "$TEST_NAME" 2>&1
     echo "=== dig A";    timeout 8 dig +time=3 +tries=1 A "$TEST_NAME" 2>&1; } > "$d/24-dig-system.txt" 2>&1
+  { for l in $(ls /sys/class/net); do echo "$l: dns=[$(resolvectl dns "$l" 2>/dev/null | sed 's/^[^:]*: *//')] domain=[$(resolvectl domain "$l" 2>/dev/null | sed 's/^[^:]*: *//')]"; done
+    echo; resolvectl dns 2>&1; echo; cat /etc/systemd/resolved.conf /etc/systemd/resolved.conf.d/*.conf 2>/dev/null | grep -v '^#'
+    echo; echo "### last D-Bus calls into resolved"; tail -100 "$DBUS_LOG" 2>/dev/null; } > "$d/26-resolved-links-dbus.txt" 2>&1
   { ss -ulpn 2>/dev/null | grep -E ':53\b'; ss -tulpn 2>/dev/null | grep -E ':53\b'; } > "$d/25-port53-listeners.txt" 2>&1
 
   # NIC / driver state (r8169: look at errors, resets, link flaps, EEE, ASPM)
@@ -122,7 +163,20 @@ counters_line() {
 # ---- main -------------------------------------------------------------------------------------
 for t in dig ethtool resolvectl; do have "$t" || log "WARN: '$t' not installed, some probes/snapshot parts will be empty (sudo apt install dnsutils ethtool)"; done
 [ "$(id -u)" -ne 0 ] && log "NOTE: not running as root; ethtool -S / lspci -vvv may be incomplete (run with sudo for full data)"
-log "START iface=$IFACE interval=${INTERVAL}s"
+if [ "$1" = snapshot ]; then   # one-shot: probe once, full snapshot + logs since boot, exit
+  run_probes; log "ONESHOT $RESULT"; snapshot oneshot
+  d="$(ls -dt "$INC"/*-oneshot | head -1)"
+  journalctl -k -b --no-pager > "$d/45-kernel-boot.log" 2>&1
+  journalctl -b --no-pager -u NetworkManager -u systemd-networkd -u systemd-resolved -u wpa_supplicant > "$d/46-net-services-boot.log" 2>&1
+  journalctl -b --no-pager -p warning > "$d/47-warnings-boot.log" 2>&1
+  { last -x reboot shutdown 2>&1 | head -10; echo; lspci -nnk 2>&1 | grep -A3 -i ethernet; echo; ip -br link; ip -br addr; } > "$d/48-hw-boot.txt" 2>&1
+  [ -d "$HOME/netwatch" ] && [ "$HOME/netwatch" != "$BASE" ] && cp -r "$HOME/netwatch" "$BASE/previous-run-$(id -un)" 2>/dev/null
+  [ -d /root/netwatch ] && [ /root/netwatch != "$BASE" ] && cp -r /root/netwatch "$BASE/previous-run-root" 2>/dev/null
+  sync; echo "done -> $d"; exit 0
+fi
+
+log "START iface=$IFACE interval=${INTERVAL}s logdir=$BASE"
+start_dbus_watch
 RESULT="baseline"; snapshot baseline
 
 consec=0; in_incident=0; last_snap=0; last_counter=0
