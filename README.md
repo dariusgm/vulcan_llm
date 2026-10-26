@@ -14,8 +14,12 @@ Scripts to reproduce a local llama.cpp (Vulkan) server plus an OpenCode config.
 | File | Purpose |
 |---|---|
 | `setup.sh` | One-time install and build |
-| `server.sh` | Tune the GPU and start `llama-server` on `127.0.0.1:8080` |
-| `stop.sh` | Stop `llama-server` (SIGTERM, SIGKILL after a timeout) |
+| `server.sh` | Starts both servers: `server_bge.sh` in the background, then `server_qwen.sh` in the foreground |
+| `stop.sh` | Stops both servers via `stop_qwen.sh` and `stop_bge.sh` |
+| `server_qwen.sh` | Qwen chat server on `0.0.0.0:9931` (GPU, tunes GPU clocks with sudo) |
+| `stop_qwen.sh` | Stops the Qwen server (SIGTERM, SIGKILL after a timeout) |
+| `server_bge.sh` | bge-m3 embedding server on `0.0.0.0:9094` (CPU only) |
+| `stop_bge.sh` | Stops the embedding server (same behavior as `stop_qwen.sh`) |
 | `opencode.jsonc` | OpenCode config, copy to `~/.config/opencode/opencode.jsonc` |
 
 ## setup.sh
@@ -30,10 +34,25 @@ Scripts to reproduce a local llama.cpp (Vulkan) server plus an OpenCode config.
    short idle gaps and evicts all VRAM to system RAM, so weights are then read over PCIe. This alone took the
    177B model from 5.6 to 11 t/s. For permanence you can also add the kernel parameter `amdgpu.runpm=0`.
 
-## server.sh
+## server.sh (both servers)
+
+`./server.sh` starts the embedding server in the background (log: `server_bge.log`) and then runs
+`server_qwen.sh` in the foreground (log: whatever `server.sh` writes to stdout). `./stop.sh` stops both.
+Extra arguments go to the Qwen server.
+
+## server_bge.sh (embeddings, CPU)
+
+`bge-m3` Q8_0 (~635 MB, multilingual, 8k context), port `9094` (`BGE_PORT` overrides it).
+Runs with `--device none`, so it uses no VRAM and leaves the GPU to the chat model. `-t 4` keeps it from
+competing with the chat model's 12 threads. Batch and ubatch are both 8192, since an encoder needs the whole input in one ubatch.
+
+Test: `curl localhost:9094/v1/embeddings -H 'Content-Type: application/json' -d '{"input":"Hallo"}'` returns 1024-dimensional vectors.
+
+## server_qwen.sh (chat)
 
 Requires sudo. First it pins GPU state (runtime PM off, manual DPM with memory clock at max, sclk levels 1–2);
-the default auto DPM left the memory clock at 500 MHz. Then it starts `llama-server`.
+the default auto DPM left the memory clock at 500 MHz. Then it starts `llama-server` on port `9931`
+(`QWEN_PORT` overrides it; 9931 is the port llama.cpp's notice says will become the default).
 
 **Model: `Qwen3.8-Flash-Next` 177B (UD-IQ4_XS, ~89 GB)** — downloaded from Hugging Face on first run; needs the RAM (128 GB here).
 - `--cpu-moe`: all experts on CPU, dense weights (~4.5 GB) on the GPU. Moving experts to the GPU was
@@ -45,12 +64,12 @@ the default auto DPM left the memory clock at 500 MHz. Then it starts `llama-ser
 Why this model: it gives consistent tool execution in OpenCode's agentic mode. A smaller
 Qwen3-Coder-30B-A3B was about 2x faster (~25–29 t/s) but its tool calls were inconsistent, so it was dropped.
 
-Extra arguments are passed to `llama-server`, e.g. `./server.sh --port 8081`.
+Extra arguments are passed to `llama-server`. To change the port, set `QWEN_PORT` (e.g. `QWEN_PORT=8081 ./server.sh`).
 
 ## OpenCode
 
 Copy `opencode.jsonc` to `~/.config/opencode/`. It defines a `llamacpp` provider pointing at
-`http://127.0.0.1:8080/v1` with the model `qwen3.8-flash-next` (an alias, since llama-server serves whatever
+`http://127.0.0.1:9931/v1` with the model `qwen3.8-flash-next` (an alias, since llama-server serves whatever
 it loaded), set as the default.
 
 Tips: OpenCode's system prompt is ~10k tokens, so the first request needs a ~75 s prefill; later turns hit

@@ -5,7 +5,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "llama.cpp (local Vulkan)",
       "options": {
-        "baseURL": "http://127.0.0.1:8080/v1",
+        "baseURL": "http://127.0.0.1:9931/v1",
         "timeout": 3600000,
         "headerTimeout": 3600000,
         "chunkTimeout": 3600000
