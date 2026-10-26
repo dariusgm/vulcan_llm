@@ -18,7 +18,7 @@ Scripts to reproduce a local llama.cpp (Vulkan) server plus an OpenCode config.
 | `stop.sh` | Stops both servers via `stop_qwen.sh` and `stop_bge.sh` |
 | `server_qwen.sh` | Qwen chat server on `0.0.0.0:9931` (GPU, tunes GPU clocks with sudo) |
 | `stop_qwen.sh` | Stops the Qwen server (SIGTERM, SIGKILL after a timeout) |
-| `server_bge.sh` | bge-m3 embedding server on `0.0.0.0:9094` (CPU only) |
+| `server_bge.sh` | bge-m3 embedding server on `0.0.0.0:9932` (CPU only) |
 | `stop_bge.sh` | Stops the embedding server (same behavior as `stop_qwen.sh`) |
 | `opencode.jsonc` | OpenCode config, copy to `~/.config/opencode/opencode.jsonc` |
 
@@ -42,11 +42,11 @@ Extra arguments go to the Qwen server.
 
 ## server_bge.sh (embeddings, CPU)
 
-`bge-m3` Q8_0 (~635 MB, multilingual, 8k context), port `9094` (`BGE_PORT` overrides it).
+`bge-m3` Q8_0 (~635 MB, multilingual, 8k context), port `9932` (`BGE_PORT` overrides it).
 Runs with `--device none`, so it uses no VRAM and leaves the GPU to the chat model. `-t 4` keeps it from
 competing with the chat model's 12 threads. Batch and ubatch are both 8192, since an encoder needs the whole input in one ubatch.
 
-Test: `curl localhost:9094/v1/embeddings -H 'Content-Type: application/json' -d '{"input":"Hallo"}'` returns 1024-dimensional vectors.
+Test: `curl localhost:9932/v1/embeddings -H 'Content-Type: application/json' -d '{"input":"Hallo"}'` returns 1024-dimensional vectors.
 
 ## server_qwen.sh (chat)
 

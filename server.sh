@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start both servers:
-#   embedding server (bge-m3, CPU)  -> :9094, started in the background, log in server_bge.log
+#   embedding server (bge-m3, CPU)  -> :9932, started in the background, log in server_bge.log
 #   Qwen chat server                -> :9931, started in the foreground (exec), extra args go to it
 # Stop both with ./stop.sh
 set -euo pipefail
