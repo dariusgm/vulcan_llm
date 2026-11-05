@@ -36,7 +36,9 @@ preflight() {
   fi
 
   # MemAvailable counts a page-cached model as available, so this holds with or without a warm cache.
-  model_mb=$(du -sLm ~/.cache/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots 2>/dev/null | cut -f1)
+  # "|| true": du fails when the model is not cached yet, and with pipefail + set -e that would
+  # end the script silently here instead of falling back to MODEL_MB_FALLBACK.
+  model_mb=$(du -sLm ~/.cache/huggingface/hub/models--unsloth--Qwen3.8-Flash-Next-GGUF/snapshots 2>/dev/null | cut -f1 || true)
   [ "${model_mb:-0}" -gt 1000 ] || model_mb=$MODEL_MB_FALLBACK
   avail_mb=$(awk '/^MemAvailable:/{print int($2/1024)}' /proc/meminfo)
   need_mb=$(( model_mb + RAM_HEADROOM_MB ))
